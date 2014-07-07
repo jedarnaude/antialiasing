@@ -1,0 +1,63 @@
+<!doctype html>
+<html>
+	<head>
+		<title>FSAA techniques</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+
+		<!-- Default Three.js stuff-->
+		<script src="vendor/three.js/three.min.js"></script>
+		<script src="vendor/three.js/Detector.js"></script>
+		<script src="vendor/three.js/stats.min.js"></script>
+
+        <!-- PostProcessing effect composer -->
+        <script src="vendor/three.js/postprocessing/CopyShader.js"></script>
+        <script src="vendor/three.js/postprocessing/EffectComposer.js"></script>
+        <script src="vendor/three.js/postprocessing/MaskPass.js"></script>
+        <script src="vendor/three.js/postprocessing/RenderPass.js"></script>
+        <script src="vendor/three.js/postprocessing/ShaderPass.js"></script>
+
+        <!-- THREEx.js utils-->
+		<script src="vendor/threex/THREEx.WindowResize.js"></script>
+		<script src="vendor/threex.dragpancontrols.js"></script>
+
+		<link  href="css/main.css" rel="stylesheet"/>
+	</head>
+<body>
+<script id="fragment_shader_screen" type="x-shader/x-fragment">
+
+			varying vec2 vUv;
+			uniform sampler2D tDiffuse;
+
+			void main() {
+
+				gl_FragColor = texture2D( tDiffuse, vUv );
+
+			}
+
+</script>
+<script id="vertexShader" type="x-shader/x-vertex">
+
+			varying vec2 vUv;
+
+			void main() {
+
+				vUv = uv;
+				gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+
+			}
+
+</script>
+
+	<!-- three.js container -->
+    	<div id="container"></div>
+	<!-- info on screen display -->
+	<div id="info">
+		<div class="top">
+			FSAA techniques by
+			<a href="http://www.yetanother.me/" target="_blank">@jedarnaude</a>
+		</div>
+	</div>
+    <script src="js/main.js"></script>
+</body>
+</html>
