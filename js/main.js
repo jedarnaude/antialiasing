@@ -5,16 +5,7 @@ if (!Detector.webgl)
 
 var container, stats;
 
-var camera, camera, sceneRTT, sceneScreen, scene, renderer, zmesh1, zmesh2;
-
-var mouseX = 0, mouseY = 0;
-
-var windowHalfX = window.innerWidth / 2;
-var windowHalfY = window.innerHeight / 2;
-
-var rtTexture, material, quad;
-
-var delta = 0.01;
+var camera, camera, sceneRTT, scene, renderer, zmesh1;
 
 var Viewport = function (_x, _y, _w, _h) {
     this.x = _x;
@@ -23,23 +14,32 @@ var Viewport = function (_x, _y, _w, _h) {
     this.height = _h;
 };
 
-var viewport = new Viewport(0, 0, window.innerWidth, window.innerHeight);
+var viewportScaleFactor = 0.5;
+var renderSizeFactor = 1.0 / viewportScaleFactor;
+var viewport = new Viewport(0, 0, window.innerWidth * viewportScaleFactor , window.innerHeight * viewportScaleFactor );
 
 // TODO: multiple views at the same time with all techniques at once
 var data = {
     noAA: {
         func: renderNoAA,
         rtt: undefined,
+        composer: undefined,
         viewport: new Viewport(0, 0, viewport.width * 0.5, viewport.height * 0.5)
     },
     SSAA: {
         func: renderSSAA,
         rtt: undefined,
+        composer: undefined,
         viewport: new Viewport(viewport.width * 0.5, viewport.height * 0.5, viewport.width * 0.5, viewport.height * 0.5)
     },
-    MSAA: undefined,
-    MLAA: undefined,
-    FXAA: undefined
+    DLAA: {
+        func: renderDLAA,
+        rtt: undefined,
+        composer: undefined,
+        viewport: new Viewport(viewport.width * 0.5, viewport.height * 0.5, viewport.width * 0.5, viewport.height * 0.5)
+    },
+    FXAA: undefined,
+    SMAA: undefined
 }
 
 var renderFunc;
@@ -49,9 +49,9 @@ initScene();
 animate();
 
 function initRenderer() {
-    renderer = new THREE.WebGLRenderer();
+    renderer = new THREE.WebGLRenderer({antialias : true});
     renderer.setClearColor( 0xBBBBBB, 1 );
-    renderer.setSize(viewport.width, viewport.height);
+    renderer.setSize(viewport.width * renderSizeFactor, viewport.height * renderSizeFactor);
     renderer.autoClear = false;
     document.getElementById('container').appendChild(renderer.domElement);
 
@@ -66,12 +66,18 @@ function initRenderer() {
 
 function swapAA(e) {
     switch (e.keyCode) {
+        case 52:
+            renderFunc = renderSMAA;
+            break;
+        case 51:
+            renderFunc = data.DLAA.func;
+            break;
         case 50:
-            renderFunc = renderSSAA;
+            renderFunc = data.SSAA.func;
             break;
         case 49:
         default:
-            renderFunc = renderNoAA;
+            renderFunc = data.noAA.func;
     }
 }
 
@@ -81,7 +87,7 @@ function initScene() {
     sceneRTT = new THREE.Scene();
 
     // Set our camera
-    camera = new THREE.OrthographicCamera( window.innerWidth / - 2, window.innerWidth / 2, window.innerHeight / 2, window.innerHeight / - 2, -10000, 10000 );
+    camera = new THREE.OrthographicCamera( window.innerWidth * -0.5, window.innerWidth * 0.5, window.innerHeight * 0.5, window.innerHeight * -0.5, -10000, 10000 );
     camera.position.z = 100;
 
     // Some utils for our camera
@@ -95,7 +101,8 @@ function initScene() {
 
     // Prepare our RTTs
     data.noAA.rtt = new THREE.WebGLRenderTarget(viewport.width, viewport.height, { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, format: THREE.RGBFormat });
-    data.SSAA.rtt = new THREE.WebGLRenderTarget(viewport.width * 2, viewport.height * 2, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, format: THREE.RGBFormat });
+    data.SSAA.rtt = new THREE.WebGLRenderTarget(viewport.width * 2, viewport.height * 2, { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, format: THREE.RGBFormat });
+    data.DLAA.rtt = new THREE.WebGLRenderTarget(viewport.width, viewport.height, { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, format: THREE.RGBFormat });
 
     // Our scene
     var geometry = new THREE.TorusGeometry( 100, 25, 15, 30 );
@@ -112,11 +119,10 @@ function initScene() {
     var plane = new THREE.PlaneGeometry( window.innerWidth, window.innerHeight );
     var materialScreen = new THREE.ShaderMaterial( {
         uniforms: { tDiffuse: { type: "t", value: data.noAA.rtt } },
-        vertexShader: document.getElementById( 'vertexShader' ).textContent,
-        fragmentShader: document.getElementById( 'fragment_shader_screen' ).textContent,
+        vertexShader: document.getElementById('Default_vs').textContent,
+        fragmentShader: document.getElementById('Screen_fs').textContent,
 
         depthWrite: false
-
     } );
 
     quad = new THREE.Mesh( plane, materialScreen );
@@ -129,18 +135,36 @@ function initScene() {
 function renderNoAA() {
     quad.material.uniforms.tDiffuse.value = data.noAA.rtt;
     renderer.render(sceneRTT, camera, data.noAA.rtt, true);
+    renderer.render(scene, camera);
 }
 
 function renderSSAA() {
     quad.material.uniforms.tDiffuse.value = data.SSAA.rtt;
-    renderer.render( sceneRTT, camera, data.SSAA.rtt, true );
+    renderer.render(sceneRTT, camera, data.SSAA.rtt, true);
+    renderer.render(scene, camera);
 }
 
-function renderMSAA() {
-    // Manually done MSAA
+function renderDLAA() {
+    // Create our composer
+    if (data.DLAA.composer == undefined) {
+        data.DLAA.composer = new THREE.EffectComposer(renderer, data.DLAA.rtt);
+        data.DLAA.composer.addPass(new THREE.RenderPass(sceneRTT, camera));
+
+        var effect = new THREE.ShaderPass(
+            {
+                uniforms: { tDiffuse: { type: "t", value: data.DLAA.rtt }, viewport: { type: "v2", value: new THREE.Vector2(viewport.width,viewport.height)} },
+                vertexShader: document.getElementById('Default_vs').textContent,
+                fragmentShader: document.getElementById('DLAA_fs').textContent
+            }
+        );
+        effect.renderToScreen = true;
+        data.DLAA.composer.addPass( effect );
+    }
+
+    data.DLAA.composer.render();
 }
 
-function renderMLAA() {
+function renderSMAA() {
     // No clue how this works
 }
 
@@ -155,10 +179,13 @@ function animate() {
 }
 
 function render() {
-    var time = Date.now();
+    var time = 0.0015;
+
+    if (zmesh1) {
+        zmesh1.rotation.y = time;
+    }
 
     // Render our stuff
     renderer.clear();
     renderFunc();
-    renderer.render( scene, camera );
 }

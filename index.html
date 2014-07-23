@@ -24,7 +24,127 @@
 		<link  href="css/main.css" rel="stylesheet"/>
 	</head>
 <body>
-<script id="fragment_shader_screen" type="x-shader/x-fragment">
+<script id="DLAA_fs" type="x-shader/x-fragment">
+//
+// Directionally Localized Anti-Aliasing (DLAA)
+// Original code by Dmitry Andreev
+// Ported by José Enrique D'Arnaude
+//
+
+#define LD( o, dx, dy ) o = texture2D( tDiffuse, vUv + vec2( dx, dy ) * inverse_input_size );
+
+uniform sampler2D tDiffuse;
+uniform vec2 viewport;
+
+varying vec2 vUv;
+
+float GetIntensity( const vec3 rgb ) {
+    return dot( rgb, vec3( 0.33, 0.33, 0.33 ) );
+}
+
+void main() {
+    vec2 inverse_input_size = vec2( 1.0, 1.0 ) / viewport;
+
+    const float lambda = 3.0;
+    const float epsilon = 0.1;
+
+    //
+    // Short Edges
+    //
+
+    vec4 center, left_01, right_01, top_01, bottom_01;
+
+    // sample 5x5 cross
+    LD( center,      0,   0 )
+    LD( left_01,  -1.5,   0 )
+    LD( right_01,  1.5,   0 )
+    LD( top_01,      0,-1.5 )
+    LD( bottom_01,   0, 1.5 )
+
+    vec4 w_h = 2.0 * ( left_01 + right_01 );
+    vec4 w_v = 2.0 * ( top_01 + bottom_01 );
+
+    // Softer (5-pixel wide high-pass)
+    vec4 edge_h = abs( w_h - 4.0 * center ) / 4.0;
+    vec4 edge_v = abs( w_v - 4.0 * center ) / 4.0;
+
+    vec4 blurred_h = ( w_h + 2.0 * center ) / 6.0;
+    vec4 blurred_v = ( w_v + 2.0 * center ) / 6.0;
+
+    float edge_h_lum = GetIntensity( edge_h.xyz );
+    float edge_v_lum = GetIntensity( edge_v.xyz );
+    float blurred_h_lum = GetIntensity( blurred_h.xyz );
+    float blurred_v_lum = GetIntensity( blurred_v.xyz );
+
+    float edge_mask_h = clamp( ( lambda * edge_h_lum - epsilon ) / blurred_v_lum, 0.0, 1.0 );
+    float edge_mask_v = clamp( ( lambda * edge_v_lum - epsilon ) / blurred_h_lum, 0.0, 1.0 );
+
+    vec4 clr = center;
+    clr = mix( clr, blurred_h, edge_mask_v );
+    clr = mix( clr, blurred_v, edge_mask_h * 0.5 ); // TFU2 uses 1.0f instead of 0.5f
+
+    //
+    // Long Edges
+    //
+
+    vec4 h0, h1, h2, h3, h4, h5, h6, h7;
+    vec4 v0, v1, v2, v3, v4, v5, v6, v7;
+
+    // sample 16x16 cross (sparse-sample on X360, incremental kernel update on SPUs)
+    LD( h0, 1.5, 0 ) LD( h1, 3.5, 0 ) LD( h2, 5.5, 0 ) LD( h3, 7.5, 0 ) LD( h4, -1.5,0 ) LD( h5, -3.5,0 ) LD( h6, -5.5,0 ) LD( h7, -7.5,0 )
+    LD( v0, 0, 1.5 ) LD( v1, 0, 3.5 ) LD( v2, 0, 5.5 ) LD( v3, 0, 7.5 ) LD( v4, 0,-1.5 ) LD( v5, 0,-3.5 ) LD( v6, 0,-5.5 ) LD( v7, 0,-7.5 )
+
+    float long_edge_mask_h = ( h0.a + h1.a + h2.a + h3.a + h4.a + h5.a + h6.a + h7.a ) / 8.0;
+    float long_edge_mask_v = ( v0.a + v1.a + v2.a + v3.a + v4.a + v5.a + v6.a + v7.a ) / 8.0;
+
+    long_edge_mask_h = clamp( long_edge_mask_h * 2.0 - 1.0, 0.0, 1.0);
+    long_edge_mask_v = clamp( long_edge_mask_v * 2.0 - 1.0, 0.0, 1.0 );
+
+    if ( abs( long_edge_mask_h - long_edge_mask_v ) > 0.2 ) {
+        vec4 left, right, top, bottom;
+
+        LD( left,  -1,  0 )
+        LD( right,  1,  0 )
+        LD( top,    0, -1 )
+        LD( bottom, 0,  1 )
+
+        vec4 long_blurred_h = ( h0 + h1 + h2 + h3 + h4 + h5 + h6 + h7 ) / 8.0;
+        vec4 long_blurred_v = ( v0 + v1 + v2 + v3 + v4 + v5 + v6 + v7 ) / 8.0;
+
+        float lb_h_lum   = GetIntensity( long_blurred_h.xyz );
+        float lb_v_lum   = GetIntensity( long_blurred_v.xyz );
+
+        float center_lum = GetIntensity( center.xyz );
+        float left_lum   = GetIntensity( left.xyz );
+        float right_lum  = GetIntensity( right.xyz );
+        float top_lum    = GetIntensity( top.xyz );
+        float bottom_lum = GetIntensity( bottom.xyz );
+
+        vec4 clr_v = center;
+        vec4 clr_h = center;
+
+        // vectorized search
+        float hx = clamp( 0.0 + ( lb_h_lum - top_lum    ) / ( center_lum - top_lum    ), 0.0, 1.0 );
+        float hy = clamp( 1.0 + ( lb_h_lum - center_lum ) / ( center_lum - bottom_lum ), 0.0, 1.0 );
+        float vx = clamp( 0.0 + ( lb_v_lum - left_lum   ) / ( center_lum - left_lum   ), 0.0, 1.0 );
+        float vy = clamp( 1.0 + ( lb_v_lum - center_lum ) / ( center_lum - right_lum  ), 0.0, 1.0 );
+
+        vec4 vhxy = vec4( vx, vy, hx, hy );
+        vhxy = vhxy == vec4( 0, 0, 0, 0 ) ? vec4( 1, 1, 1, 1 ) : vhxy;
+
+        clr_v = mix( left  , clr_v, vhxy.x );
+        clr_v = mix( right , clr_v, vhxy.y );
+        clr_h = mix( top   , clr_h, vhxy.z );
+        clr_h = mix( bottom, clr_h, vhxy.w );
+
+        clr = mix( clr, clr_v, long_edge_mask_v );
+        clr = mix( clr, clr_h, long_edge_mask_h );
+    }
+
+    gl_FragColor = clr;
+}
+</script>
+<script id="Screen_fs" type="x-shader/x-fragment">
 
 			varying vec2 vUv;
 			uniform sampler2D tDiffuse;
@@ -36,7 +156,7 @@
 			}
 
 </script>
-<script id="vertexShader" type="x-shader/x-vertex">
+<script id="Default_vs" type="x-shader/x-vertex">
 
 			varying vec2 vUv;
 
